@@ -2,6 +2,11 @@
 /*
 HTML4.01 TR: http://www.w3.org/TR/html401
 for details, please refer to HTML 4.01 DTD http://www.w3.org/TR/html401/sgml/dtd.html
+
+TODO:
+- add parents stack while processing
+- play with <span> tags in firefox - they can be a block containers
+
 */
 // elements marked as - 0 EMPTY in dtd
 
@@ -37,7 +42,7 @@ $validation = array( // kye_tag => possible tags under the key. It is almost the
     "select" => tags_array("optgroup option "),
     "optgroup" => tags_array("option "),
     "option" => tags_array(""),
-    "table" => tags_array("caption col colgroup thead tbody tfoot tr td input "),//actually, only input type='hidden'
+    "table" => tags_array("a caption col colgroup thead tbody tfoot tr td input "),//actually, only input type='hidden'
     "tr" => tags_array("td th "),
     "thead" => tags_array("tr td "),
     "tbody" => tags_array("tr td "),
@@ -113,43 +118,47 @@ there is no nodetype - if a child is a text node, it is stored as a string
     }
 
     function detach() {
-        if ($this->parent and $this->parent->children) {
-            $count = count($this->parent->children);
-            for ($i=0; $i<$count; $i++)
-                if ($this->parent->children[$i] === $this) {
-                    array_splice($this->parent->children, $i, 1);
-                    unset($this->parent);
-                    return;
-                }
+		if (!$this->parent) return;
+		$i = $this->pindex();
+		if ($i !== false) {
+			array_splice($this->parent->children, $i, 1);
+			unset($this->parent);
         }
     }
+	
+	function detach_content() {
+		$children = $this->children;
+		$this->children = array();
+		foreach ($children as &$child)
+			if ($this->same_class($child)) $child->parent = null;
+		return $children;
+	}
+
+	function delete_content() {
+		$children = $this->children;
+		$this->children = array();
+		foreach ($children as &$child)
+			if ($this->same_class($child)) $child->__destruct();
+		return $this;
+	}
 
     function preinsert() {
         $args = func_get_args();
-        if ($this->parent and $this->parent->children) {
-            for ($i=0; $i<count($this->parent->children); $i++)
-                if ($this->parent->children[$i] === $this) {
-                    array_splice($this->parent->children, $i, 0, $args);
-                    $i += count($args);
-                    foreach ($args as &$arg)
-                        if ($this->same_class($arg)) $arg->parent =&$this->parent;
-                    return;
-                }
+		$i = $this->pindex();
+		if ($i !== false) {
+			array_splice($this->parent->children, $i, 0, $args);
+			foreach ($args as &$arg)
+				if ($this->same_class($arg)) $arg->parent =&$this->parent;
         }
     }
 
     function postinsert() {
         $args = func_get_args();
-        if ($this->parent and $this->parent->children) {
-            for ($i=0; $i<count($this->parent->children); $i++)
-                if ($this->parent->children[$i] === $this) {
-                    array_splice($this->parent->children, ++$i, 0, $args);
-                    $i += count($args);
-                    foreach ($args as &$arg)
-                        if ($this->same_class($arg))
-                            $arg->parent =&$this->parent;
-                    return;
-                }
+		$i = $this->pindex();
+		if ($i !== false) {
+			array_splice($this->parent->children, ++$i, 0, $args); // ++i because it is POSTinsert
+			foreach ($args as &$arg)
+				if ($this->same_class($arg)) $arg->parent =&$this->parent;
         }
     }
     
@@ -161,6 +170,27 @@ there is no nodetype - if a child is a text node, it is stored as a string
         }
         return false;
     }
+	
+	// SECONDARY STRUCTURAL METHODS
+	
+	function pindex() {
+        if ($this->parent and $this->parent->children)
+            for ($i=0; $i<count($this->parent->children); $i++)
+                if ($this->parent->children[$i] === $this) return $i;
+		return false;
+	}
+	
+	function left() {
+        $i = $this->pindex();
+		if ($i) return $this->parent->children[$i-1];
+		return null;
+	}
+	
+	function right() {
+        $i = $this->pindex();
+		if ($i !== false) return $this->parent->children[$i+1];
+		return null;
+	}
 
     // DUMPING METHODS
     function as_HTML() {
@@ -268,7 +298,7 @@ class Tree extends Element {
                 continue;
             }
             
-            if ($tag[0] == '!') {// XML declarations, like <!DOCTYPE ..> 
+            if ($tag[0] == '!') {// XML declarations, like <!DOCTYPE ..>
                 $str = $this->text_until($tag, '>');
                 $this->cursor->push_content($str);
                 continue;
@@ -278,7 +308,7 @@ class Tree extends Element {
             if ($superdata_arr[$tag]) {// tags including #PCDATA
                 $node = new Element($tag);
                 if (!$this->parse_attr($node)) {
-                    $node->push_content($this->copy_until("</$tag"));
+                    $node->push_content($this->copy_until("</$tag", true));
                     $this->copy_until('>');
                     ++$this->pos;
                 }
@@ -318,9 +348,9 @@ class Tree extends Element {
     function parse_file($file) {return $this->parse_content(file_get_contents($file)); }
     function char() { return $this->doc[$this->pos];}
 
-    protected function copy_until($str) {
+    protected function copy_until($str, $case_insensitive=false) {
         $old_pos = $this->pos;
-        $new_pos = strpos($this->doc, $str, $old_pos);
+        $new_pos = $case_insensitive ? stripos($this->doc, $str, $old_pos) : strpos($this->doc, $str, $old_pos);
         $this->pos = ($new_pos !== false) ? $new_pos : $this->size;
         return substr($this->doc, $old_pos, $this->pos - $old_pos);
     }
